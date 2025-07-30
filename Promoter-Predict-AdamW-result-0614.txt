@@ -1,0 +1,31 @@
+Warning: Unexpected response 'dnon-promoter', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+Warning: Unexpected response 'dnon-promoter', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+Warning: Unexpected response 'dielsaytpswttsdvat', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+Warning: Unexpected response 'dpromoter', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+Warning: Unexpected response 'dmevavavavavava', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+Warning: Unexpected response 'dpromoter', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+Warning: Unexpected response 'dss', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+Warning: Unexpected response 'dpeleeageeeteadrgkgg', defaulting to 'non-promoter'. Input: Below is an instruction that describes a task. Write a response that appropriate...
+
+--- Evaluation Results ---
+True label distribution: Counter({'promoter': 2968, 'non-promoter': 2952})
+Predicted label distribution: Counter({'non-promoter': 3111, 'promoter': 2809})
+
+Total test samples: 5920
+Accuracy: 0.9512
+MCC: 0.9037
+AUC-ROC Score: 0.9881
+
+Classification Report:
+              precision    recall  f1-score   support
+
+non-promoter     0.9280    0.9780    0.9523      2952
+    promoter     0.9769    0.9245    0.9500      2968
+
+    accuracy                         0.9512      5920
+   macro avg     0.9524    0.9513    0.9512      5920
+weighted avg     0.9525    0.9512    0.9512      5920
+
+Confusion matrix saved to confusion_matrix_adamw_0614.png
+ROC curve saved to roc_curve_adamw_0614.png
+Detailed results saved to model_test_results_adamw_0614.json

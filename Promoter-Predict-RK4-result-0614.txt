@@ -1,0 +1,23 @@
+
+--- Evaluation Results ---
+True label distribution: Counter({'promoter': 2968, 'non-promoter': 2952})
+Predicted label distribution: Counter({'non-promoter': 2992, 'promoter': 2928})
+
+Total test samples: 5920
+Accuracy: 0.9797
+MCC: 0.9595
+AUC-ROC Score: 0.9967
+
+Classification Report:
+              precision    recall  f1-score   support
+
+non-promoter     0.9733    0.9864    0.9798      2952
+    promoter     0.9863    0.9730    0.9796      2968
+
+    accuracy                         0.9797      5920
+   macro avg     0.9798    0.9797    0.9797      5920
+weighted avg     0.9798    0.9797    0.9797      5920
+
+Confusion matrix saved to confusion_matrix_rk4_0614.png
+ROC curve saved to roc_curve_rk4_0614.png
+Detailed results saved to model_test_results_rk4_0614.json
