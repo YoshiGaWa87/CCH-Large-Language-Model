@@ -47,8 +47,10 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import send_example_telemetry
 from transformers.utils.versions import require_version
 
-from peft import LoraConfig, TaskType, get_peft_model, PeftModel, get_peft_model_state_dict
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from peft import LoraConfig, TaskType, get_peft_model, PeftModel
+# --- REMOVED --- Unused imports
+# from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+# from peft import get_peft_model_state_dict
 
 # 引入 matplotlib 用於繪圖
 import matplotlib.pyplot as plt
@@ -62,33 +64,8 @@ DEFAULT_UNK_TOKEN = "<unk>"
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
 
 
-class SavePeftModelCallback(transformers.TrainerCallback):
-    def save_model(self, args, state, kwargs):
-        if state.best_model_checkpoint is not None:
-            checkpoint_folder = os.path.join(state.best_model_checkpoint, "sft_lora_model")
-        else:
-            checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
-
-        peft_model_path = os.path.join(checkpoint_folder, "sft_lora_model")
-        kwargs["model"].save_pretrained(peft_model_path)
-        
-        if "tokenizer" in kwargs:
-            kwargs["tokenizer"].save_pretrained(peft_model_path)
-        else:
-            kwargs["processing_class"].save_pretrained(peft_model_path)
-
-    def on_save(self, args, state, control, **kwargs):
-        self.save_model(args, state, kwargs)
-        return control
-
-    def on_train_end(self, args, state, control, **kwargs):
-        peft_model_path = os.path.join(args.output_dir, "sft_lora_model")
-        kwargs["model"].save_pretrained(peft_model_path)
-        
-        if "tokenizer" in kwargs:
-            kwargs["tokenizer"].save_pretrained(peft_model_path)
-        else:
-            kwargs["processing_class"].save_pretrained(peft_model_path)
+# --- REMOVED --- The SavePeftModelCallback is no longer necessary.
+# The standard Trainer handles PEFT model saving automatically.
 
 
 @dataclass
@@ -169,7 +146,7 @@ class ModelArguments:
 @dataclass
 class DataTrainingArguments:
     """
-植物Arguments pertaining to what data we are going to input our model for training and eval.
+    Arguments pertaining to what data we are going to input our model for training and eval.
     """
     dataset_dir: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
@@ -240,13 +217,11 @@ def main():
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
 
-    # Log on each process the small summary:
     logger.warning(
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
         + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
 
-    # Detecting last checkpoint.
     last_checkpoint = None
     if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
@@ -261,10 +236,8 @@ def main():
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
-    # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Load configuration
     config_kwargs = {
         "cache_dir": model_args.cache_dir,
         "revision": model_args.model_revision,
@@ -282,7 +255,6 @@ def main():
             config.update_from_string(model_args.config_overrides)
             logger.info(f"New config: {config}")
 
-    # Load tokenizer using LlamaTokenizerFast
     tokenizer_kwargs = {
         "cache_dir": model_args.cache_dir,
         "use_fast": model_args.use_fast_tokenizer,
@@ -302,15 +274,10 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    # Set padding token
     if tokenizer.pad_token is None:
         logger.info(f"Adding pad token {DEFAULT_PAD_TOKEN}")
         tokenizer.add_special_tokens({"pad_token": DEFAULT_PAD_TOKEN})
-    elif tokenizer.pad_token != tokenizer.eos_token:
-        logger.info(f"Pad token not set, using EOS token {tokenizer.eos_token} as pad token")
-        tokenizer.pad_token = tokenizer.eos_token
 
-    # Data collator and datasets
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     eval_dataset = None
     train_dataset = None
@@ -346,7 +313,6 @@ def main():
         logger.info("Eval example:")
         logger.info(tokenizer.decode(eval_dataset[0]['input_ids']))
 
-    # Load model
     if model_args.model_name_or_path:
         torch_dtype = (
             model_args.torch_dtype
@@ -368,14 +334,19 @@ def main():
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
-    # Resize embeddings if necessary
-    logger.info(f"len(tokenizer): {len(tokenizer)}")
     embedding_size = model.get_input_embeddings().weight.shape[0]
-    if len(tokenizer) != embedding_size:
+    if len(tokenizer) > embedding_size:
         logger.info("Resizing the embedding size to match the tokenizer")
         model.resize_token_embeddings(len(tokenizer))
+        # If you resize embeddings, you may want to train the embedding layer
+        # and lm_head. Check if they should be added to modules_to_save
+        # Note: for Llama models, lm_head is often tied to embed_tokens.
+        # Adding one might be sufficient.
+        if training_args.modules_to_save:
+             if 'embed_tokens' not in training_args.modules_to_save and 'lm_head' not in training_args.modules_to_save:
+                 logger.warning("Embeddings were resized, but 'embed_tokens' or 'lm_head' not in 'modules_to_save'. You may want to train them.")
 
-    # PEFT configuration
+
     if training_args.peft_path is not None:
         logger.info("Peft from pre-trained model")
         model = PeftModel.from_pretrained(model, training_args.peft_path)
@@ -385,11 +356,19 @@ def main():
         modules_to_save = training_args.modules_to_save
         if modules_to_save is not None:
             modules_to_save = modules_to_save.split(',')
+        
+        # To avoid the original KeyError, before running the script,
+        # ensure that the names in --modules_to_save match your model architecture.
+        # You can inspect the model architecture by adding:
+        # print(model) 
+        
         lora_rank = training_args.lora_rank
         lora_dropout = training_args.lora_dropout
         lora_alpha = training_args.lora_alpha
         logger.info(f"target_modules: {target_modules}")
+        logger.info(f"modules_to_save: {modules_to_save}")
         logger.info(f"lora_rank: {lora_rank}")
+        
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             target_modules=target_modules,
@@ -402,13 +381,10 @@ def main():
         model = get_peft_model(model, peft_config)
 
     model.print_trainable_parameters()
-    logger.info(f"model.modules_to_save: {model.modules_to_save}")
-    old_state_dict = model.state_dict
-    model.state_dict = (
-        lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
-    ).__get__(model, type(model))
+    # print(model) # <-- You can uncomment this to inspect the model architecture
 
-    # Initialize Trainer
+    # --- REMOVED --- The state_dict monkey-patch is no longer needed.
+    
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -417,22 +393,8 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
     )
-    trainer.add_callback(SavePeftModelCallback)
-
-    # 用於儲存 loss 的列表
-    train_losses = []
-    val_losses = []
-
-    # 自訂回調函數來收集 loss
-    class LossCallback(transformers.TrainerCallback):
-        def on_log(self, args, state, control, logs=None, **kwargs):
-            if logs is not None:
-                if 'loss' in logs:  # training loss
-                    train_losses.append((state.global_step, logs['loss']))
-                if 'eval_loss' in logs:  # validation loss
-                    val_losses.append((state.global_step, logs['eval_loss']))
-
-    trainer.add_callback(LossCallback)
+    
+    # --- REMOVED --- The custom callback is no longer needed.
 
     # Training
     if training_args.do_train:
@@ -442,7 +404,11 @@ def main():
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
-
+        
+        # The trainer saves the model automatically at the end of training and based on `save_strategy`.
+        # No need for model.save_pretrained() here if using the Trainer's save features.
+        # trainer.save_model() # This would save the final model to the output_dir
+        
         metrics = train_result.metrics
         metrics["train_samples"] = len(train_dataset)
 
@@ -464,33 +430,34 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    # 繪製並儲存 loss 曲線圖
-    if train_losses or val_losses:
-        plt.figure(figsize=(10, 6))
-        
-        # 繪製 training loss
-        if train_losses:
-            steps, losses = zip(*train_losses)
-            plt.plot(steps, losses, label='Training Loss')
-        
-        # 繪製 validation loss
-        if val_losses:
-            steps, losses = zip(*val_losses)
-            plt.plot(steps, losses, label='Validation Loss')
+    # +++ MODIFIED +++: Simplified loss plotting by using trainer.state.log_history
+    if training_args.do_train:
+        log_history = trainer.state.log_history
+        train_losses = [log['loss'] for log in log_history if 'loss' in log]
+        train_steps = [log['step'] for log in log_history if 'loss' in log]
+        val_losses = [log['eval_loss'] for log in log_history if 'eval_loss' in log]
+        val_steps = [log['step'] for log in log_history if 'eval_loss' in log]
 
-        plt.xlabel('Training Steps')
-        plt.ylabel('Loss')
-        plt.title('Training and Validation Loss Curves')
-        plt.legend()
-        plt.grid(True)
-        
-        # 儲存圖表到 output_dir
-        plot_path = os.path.join(training_args.output_dir, "loss_curves_AdamW.png")
-        plt.savefig(plot_path)
-        logger.info(f"Loss curves saved to {plot_path}")
-        plt.close()
+        if train_losses or val_losses:
+            plt.figure(figsize=(10, 6))
+            
+            if train_losses:
+                plt.plot(train_steps, train_losses, label='Training Loss')
+            
+            if val_losses:
+                plt.plot(val_steps, val_losses, label='Validation Loss')
+
+            plt.xlabel('Training Steps')
+            plt.ylabel('Loss')
+            plt.title('Training and Validation Loss Curves')
+            plt.legend()
+            plt.grid(True)
+            
+            plot_path = os.path.join(training_args.output_dir, "loss_curves_AdamW.png")
+            plt.savefig(plot_path)
+            logger.info(f"Loss curves saved to {plot_path}")
+            plt.close()
+
 
 if __name__ == "__main__":
     main()
-
-
