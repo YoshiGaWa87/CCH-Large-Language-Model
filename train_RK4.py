@@ -3,7 +3,7 @@ import math
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Union
 from pathlib import Path
 
 import datasets
@@ -26,10 +26,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import send_example_telemetry
 from transformers.utils.versions import require_version
 
-from peft import LoraConfig, TaskType, get_peft_model, PeftModel, get_peft_model_state_dict
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
-
-# Import the custom RK4Optimizer
+from peft import LoraConfig, TaskType, get_peft_model, PeftModel
 from RK4_optimizer import RK4Optimizer
 
 
@@ -40,35 +37,6 @@ DEFAULT_BOS_TOKEN = "<s>"
 DEFAULT_UNK_TOKEN = "<unk>"
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
-
-
-class SavePeftModelCallback(transformers.TrainerCallback):
-    def save_model(self, args, state, kwargs):
-        if state.best_model_checkpoint is not None:
-            checkpoint_folder = os.path.join(state.best_model_checkpoint, "sft_lora_model")
-        else:
-            checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
-
-        peft_model_path = os.path.join(checkpoint_folder, "sft_lora_model")
-        kwargs["model"].save_pretrained(peft_model_path)
-        
-        if "tokenizer" in kwargs:
-            kwargs["tokenizer"].save_pretrained(peft_model_path)
-        else:
-            kwargs["processing_class"].save_pretrained(peft_model_path)
-
-    def on_save(self, args, state, control, **kwargs):
-        self.save_model(args, state, kwargs)
-        return control
-
-    def on_train_end(self, args, state, control, **kwargs):
-        peft_model_path = os.path.join(args.output_dir, "sft_lora_model")
-        kwargs["model"].save_pretrained(peft_model_path)
-        
-        if "tokenizer" in kwargs:
-            kwargs["tokenizer"].save_pretrained(peft_model_path)
-        else:
-            kwargs["processing_class"].save_pretrained(peft_model_path)
 
 
 @dataclass
@@ -227,19 +195,13 @@ class RK4Trainer(Trainer):
 
             # Check for the custom RK4Optimizer
             if self.args.optimizer_type == "RK4":
-                # For RK4, we don't use the default weight_decay from TrainingArguments
-                # but instead pass it via the custom 'weight_decay_rk4' default to RK4Optimizer
-                # The RK4Optimizer handles weight decay internally
-                # So we can remove the weight_decay from optimizer_grouped_parameters here
-                # Or simply pass all trainable parameters to RK4Optimizer and let it manage
-                # its own weight decay. For simplicity, let's pass all trainable params
-                # and assume RK4Optimizer's wd_group handles it.
-
-                # Extract trainable parameters for RK4Optimizer
                 trainable_params = [p for p in self.model.parameters() if p.requires_grad]
                 self.optimizer = RK4Optimizer(trainable_params, lr=self.args.learning_rate)
+                # Apply weight decay if specified, as RK4Optimizer might handle it internally
                 if self.args.weight_decay > 0:
                     for group in self.optimizer.param_groups:
+                        # Assuming RK4Optimizer uses a 'weight_decay_rk4' key or similar
+                        # If not, adjust this key to what RK4Optimizer expects
                         group['weight_decay_rk4'] = self.args.weight_decay
                 logger.info(f"Using custom RK4Optimizer with learning rate {self.args.learning_rate} and weight decay {self.args.weight_decay}")
             else:
@@ -250,7 +212,6 @@ class RK4Trainer(Trainer):
                     self.optimizer.beta2 = self.args.adam_beta2
                     self.optimizer.eps = self.args.adam_epsilon
                 logger.info(f"Using default optimizer {optimizer_cls.__name__}")
-
 
         return self.optimizer
 
@@ -282,7 +243,6 @@ def main():
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
 
-    # Log on each process the small summary:
     logger.warning(
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
         + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
@@ -303,10 +263,8 @@ def main():
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
-    # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Load configuration
     config_kwargs = {
         "cache_dir": model_args.cache_dir,
         "revision": model_args.model_revision,
@@ -324,7 +282,6 @@ def main():
             config.update_from_string(model_args.config_overrides)
             logger.info(f"New config: {config}")
 
-    # Load tokenizer using LlamaTokenizerFast
     tokenizer_kwargs = {
         "cache_dir": model_args.cache_dir,
         "use_fast": model_args.use_fast_tokenizer,
@@ -334,25 +291,14 @@ def main():
     if model_args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
     elif model_args.tokenizer_name_or_path:
-        tokenizer = LlamaTokenizerFast.from_pretrained(
-            model_args.tokenizer_name_or_path,
-            **tokenizer_kwargs
-        )
+        tokenizer = LlamaTokenizerFast.from_pretrained(model_args.tokenizer_name_or_path, **tokenizer_kwargs)
     else:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
-            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
-        )
+        raise ValueError("You must specify a tokenizer name or path.")
 
-    # Set padding token
     if tokenizer.pad_token is None:
         logger.info(f"Adding pad token {DEFAULT_PAD_TOKEN}")
         tokenizer.add_special_tokens({"pad_token": DEFAULT_PAD_TOKEN})
-    elif tokenizer.pad_token != tokenizer.eos_token:
-        logger.info(f"Pad token not set, using EOS token {tokenizer.eos_token} as pad token")
-        tokenizer.pad_token = tokenizer.eos_token
 
-    # Data collator and datasets
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     eval_dataset = None
     train_dataset = None
@@ -366,7 +312,7 @@ def main():
                 data_path=files,
                 tokenizer=tokenizer,
                 max_seq_length=data_args.max_seq_length,
-                data_cache_dir=None,
+                data_cache_dir=data_args.data_cache_dir,
                 preprocessing_num_workers=data_args.preprocessing_num_workers
             )
         logger.info(f"Num train_samples {len(train_dataset)}")
@@ -381,14 +327,13 @@ def main():
                 data_path=files,
                 tokenizer=tokenizer,
                 max_seq_length=data_args.max_seq_length,
-                data_cache_dir=None,
+                data_cache_dir=data_args.data_cache_dir,
                 preprocessing_num_workers=data_args.preprocessing_num_workers
             )
         logger.info(f"Num eval_samples {len(eval_dataset)}")
         logger.info("Eval example:")
         logger.info(tokenizer.decode(eval_dataset[0]['input_ids']))
 
-    # Load model
     if model_args.model_name_or_path:
         torch_dtype = (
             model_args.torch_dtype
@@ -410,14 +355,11 @@ def main():
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
-    # Resize embeddings if necessary
-    logger.info(f"len(tokenizer): {len(tokenizer)}")
     embedding_size = model.get_input_embeddings().weight.shape[0]
     if len(tokenizer) != embedding_size:
         logger.info("Resizing the embedding size to match the tokenizer")
         model.resize_token_embeddings(len(tokenizer))
 
-    # PEFT configuration
     if training_args.peft_path is not None:
         logger.info("Peft from pre-trained model")
         model = PeftModel.from_pretrained(model, training_args.peft_path)
@@ -427,11 +369,14 @@ def main():
         modules_to_save = training_args.modules_to_save
         if modules_to_save is not None:
             modules_to_save = modules_to_save.split(',')
+        
         lora_rank = training_args.lora_rank
         lora_dropout = training_args.lora_dropout
         lora_alpha = training_args.lora_alpha
         logger.info(f"target_modules: {target_modules}")
         logger.info(f"lora_rank: {lora_rank}")
+        logger.info(f"modules_to_save: {modules_to_save}")
+        
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             target_modules=target_modules,
@@ -443,14 +388,14 @@ def main():
         )
         model = get_peft_model(model, peft_config)
 
+    # 在應用 PEFT 後印出模型結構，以便檢查層名稱
+    # print(model) 
+    
     model.print_trainable_parameters()
-    logger.info(f"model.modules_to_save: {model.modules_to_save}")
-    old_state_dict = model.state_dict
-    model.state_dict = (
-        lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
-    ).__get__(model, type(model))
+    
+    # *** 移除了過時的 state_dict 猴子補丁 ***
+    # Trainer 會自動處理 PEFT 模型的儲存
 
-    # Initialize RK4Trainer instead of Trainer
     trainer = RK4Trainer(
         model=model,
         args=training_args,
@@ -459,9 +404,9 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
     )
-    trainer.add_callback(SavePeftModelCallback)
+    # *** 移除了過時的 SavePeftModelCallback ***
+    # Trainer 的預設行為已足夠
 
-    # Training
     if training_args.do_train:
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
@@ -470,6 +415,9 @@ def main():
             checkpoint = last_checkpoint
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
 
+        # 訓練完成後，Trainer 會自動儲存最後一個 checkpoint
+        # 並且 save_model 方法會被正確呼叫，只儲存 adapter
+        trainer.save_model() # 確保最終的 adapter 被儲存到 output_dir 的根目錄
         metrics = train_result.metrics
         metrics["train_samples"] = len(train_dataset)
 
@@ -477,7 +425,6 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
         metrics = trainer.evaluate()
